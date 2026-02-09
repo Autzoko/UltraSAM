@@ -166,7 +166,7 @@ def convert_split(input_dir, output_dir, split_name, split_dir_name, slice_axis)
         },
         'images': images,
         'annotations': annotations,
-        'categories': [{'id': 1, 'name': 'tumor', 'supercategory': 'lesion'}],
+        'categories': [{'id': 1, 'name': 'object', 'supercategory': 'object'}],
     }
 
     json_path = ann_out_dir / f'{split_name}.coco.json'
