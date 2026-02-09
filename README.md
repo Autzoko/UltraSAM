@@ -191,6 +191,90 @@ python datasets/tools/merge_agnostic_coco.py path_to_datas_root path_to_datas_ro
 
 </details>
 
+## ABUS Oracle Bounding Box Evaluation
+
+Evaluate UltraSAM on ABUS (Automated Breast Ultrasound) data using **oracle bounding box prompts** derived from ground truth masks. This measures segmentation performance when the model receives perfectly accurate bounding boxes, establishing an upper bound for bbox-prompted inference.
+
+### Prerequisites
+
+Install additional dependencies for ABUS data processing:
+```bash
+pip install pynrrd pycocotools
+```
+
+### Step 1: Convert ABUS 3D volumes to 2D slices
+
+Convert the 3D NRRD ABUS volumes into 2D PNG slices with COCO-format annotations. Only slices containing tumor (mask > 0) are kept. The bounding box for each slice is computed as the minimum enclosing axis-aligned rectangle of the ground truth mask.
+
+```bash
+python convert_abus_to_2d.py \
+    --input_dir /path/to/ABUS/data \
+    --output_dir ABUS_2d
+```
+
+This produces:
+```
+ABUS_2d/
+  images/{train,val,test}/     # 2D PNG slices
+  annotations/
+    train.coco.json
+    val.coco.json
+    test.coco.json
+```
+
+### Step 2: Download UltraSAM checkpoint
+
+```bash
+wget -O ./UltraSam.pth "https://s3.unistra.fr/camma_public/github/ultrasam/UltraSam.pth"
+export PYTHONPATH=$PYTHONPATH:.
+```
+
+### Step 3: Run COCO metrics evaluation (optional)
+
+```bash
+# Evaluate on test split
+mim test mmdet configs/UltraSAM/UltraSAM_full/UltraSAM_box_refine_ABUS.py \
+    --checkpoint UltraSam.pth
+
+# Evaluate on train split
+mim test mmdet configs/UltraSAM/UltraSAM_full/UltraSAM_box_refine_ABUS.py \
+    --checkpoint UltraSam.pth \
+    --cfg-options test_dataloader.dataset.ann_file="annotations/train.coco.json" \
+                  test_dataloader.dataset.data_prefix.img="images/train/" \
+                  test_evaluator.ann_file="ABUS_2d/annotations/train.coco.json"
+
+# Evaluate on val split
+mim test mmdet configs/UltraSAM/UltraSAM_full/UltraSAM_box_refine_ABUS.py \
+    --checkpoint UltraSam.pth \
+    --cfg-options test_dataloader.dataset.ann_file="annotations/val.coco.json" \
+                  test_dataloader.dataset.data_prefix.img="images/val/" \
+                  test_evaluator.ann_file="ABUS_2d/annotations/val.coco.json"
+```
+
+### Step 4: Run Dice/IoU evaluation
+
+Compute per-slice Dice coefficient and IoU with per-volume aggregation:
+
+```bash
+# Evaluate on each split
+python evaluate_abus_bbox_prompt.py \
+    --config configs/UltraSAM/UltraSAM_full/UltraSAM_box_refine_ABUS.py \
+    --checkpoint UltraSam.pth \
+    --split test --data_root ABUS_2d
+
+python evaluate_abus_bbox_prompt.py \
+    --config configs/UltraSAM/UltraSAM_full/UltraSAM_box_refine_ABUS.py \
+    --checkpoint UltraSam.pth \
+    --split val --data_root ABUS_2d
+
+python evaluate_abus_bbox_prompt.py \
+    --config configs/UltraSAM/UltraSAM_full/UltraSAM_box_refine_ABUS.py \
+    --checkpoint UltraSam.pth \
+    --split train --data_root ABUS_2d
+```
+
+Per-slice results are saved to CSV files (`abus_bbox_eval_{split}.csv`) for further analysis.
+
 ## References
 
 If you find our work helpful for your research, please consider citing us using the following BibTeX entry:
