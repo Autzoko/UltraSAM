@@ -1,6 +1,7 @@
 # Adapted from https://github.com/facebookresearch/segment-anything/blob/main/segment_anything/modeling/transformer.py
 from typing import Union, Tuple, Type, Optional
 import torch
+import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
 from mmcv.cnn import build_norm_layer
@@ -254,24 +255,42 @@ class SAMAttention(MultiheadAttention):
                 key=None,
                 value=None,
                 **kwargs):
+        if key is None:
+            key = query
+        if value is None:
+            value = key
 
-        ## Input projections
-        #query = self.q_proj(query)
-        #if key is not None:
-        #    key = self.k_proj(key)
+        b, n, _ = query.shape
+        _, s, _ = key.shape
 
-        #if value is not None:
-        #    value = self.v_proj(value)
+        # Manually project Q, K, V using the stored projection weights.
+        # This avoids the PyTorch >= 2.0 assertion that checks
+        # query.shape[-1] == embed_dim before applying projections,
+        # which fails when downsample_rate > 1 (input dim != internal dim).
+        bias = self.attn.in_proj_bias
+        q = F.linear(query, self.attn.q_proj_weight, bias[:self.embed_dims])
+        k = F.linear(key, self.attn.k_proj_weight,
+                     bias[self.embed_dims:2 * self.embed_dims])
+        v = F.linear(value, self.attn.v_proj_weight,
+                     bias[2 * self.embed_dims:])
 
-        ## no skip connection in SAM attention
-        #identity = torch.zeros_like(query)
-        #query = super().forward(query, key=key, value=value, identity=identity, **kwargs)
+        num_heads = self.attn.num_heads
+        head_dim = self.embed_dims // num_heads
 
-        #return self.out_proj(query)
+        q = q.view(b, n, num_heads, head_dim).transpose(1, 2)
+        k = k.view(b, s, num_heads, head_dim).transpose(1, 2)
+        v = v.view(b, s, num_heads, head_dim).transpose(1, 2)
 
-        # no skip connection in SAM attention
-        identity = torch.zeros_like(query)
-        return super().forward(query, key=key, value=value, identity=identity, **kwargs)
+        attn = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(head_dim)
+        attn = torch.softmax(attn, dim=-1)
+        if self.training and self.attn.dropout > 0:
+            attn = F.dropout(attn, p=self.attn.dropout, training=True)
+
+        out = torch.matmul(attn, v)
+        out = out.transpose(1, 2).contiguous().view(b, n, self.embed_dims)
+        out = self.attn.out_proj(out)
+
+        return out
 
 
 class PositionEmbeddingRandom(BaseModule):
